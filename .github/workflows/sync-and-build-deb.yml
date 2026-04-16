@@ -14,7 +14,6 @@ on:
 permissions:
   contents: write
   id-token: write
-  workflows: write
 
 env:
   UPSTREAM_REPO: pingdotgg/t3code
@@ -77,42 +76,27 @@ jobs:
     outputs:
       sync_commit: ${{ steps.sync.outputs.sync_commit }}
     steps:
-      - name: Checkout fork
+      - name: Checkout fork with upstream remote
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Add upstream remote and fetch
+      - name: Add upstream remote and fetch tag
         run: |
           git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" || true
-          git fetch upstream --tags
+          UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
+          git fetch upstream tag "$UPSTREAM_TAG" --force
+          echo "Fetched upstream tag: $UPSTREAM_TAG"
 
-      - name: Sync with upstream
+      - name: Get upstream commit hash
         id: sync
         run: |
           UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
-          echo "Syncing to upstream tag: $UPSTREAM_TAG"
-          
-          # Fetch the specific tag from upstream
-          git fetch upstream tag "$UPSTREAM_TAG" --force
-          
-          # Checkout the upstream tag (now available locally)
-          git checkout -B sync-branch "$UPSTREAM_TAG"
-          
-          # Push to fork's main
-          git push origin sync-branch:main --force-with-lease
-          
-          # Get the commit hash
-          SYNC_COMMIT=$(git rev-parse HEAD)
+          # Get commit hash from the tag
+          SYNC_COMMIT=$(git rev-parse "$UPSTREAM_TAG^{commit}")
           echo "sync_commit=$SYNC_COMMIT" >> "$GITHUB_OUTPUT"
-          
-          echo "Successfully synced to $UPSTREAM_TAG (commit: $SYNC_COMMIT)"
+          echo "Upstream tag $UPSTREAM_TAG is at commit: $SYNC_COMMIT"
 
   build-deb:
     name: Build .deb package
@@ -123,11 +107,17 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout synced code
+      - name: Checkout upstream tag
         uses: actions/checkout@v6
         with:
-          ref: main
           fetch-depth: 0
+
+      - name: Fetch and checkout upstream tag
+        run: |
+          git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" || true
+          UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
+          git fetch upstream tag "$UPSTREAM_TAG" --force
+          git checkout "$UPSTREAM_TAG"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -199,11 +189,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: main
-
       - name: Download .deb artifact
         uses: actions/download-artifact@v8
         with:
