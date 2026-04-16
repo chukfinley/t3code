@@ -1,0 +1,249 @@
+name: Sync with Upstream and Build .deb
+
+on:
+  schedule:
+    # Run every hour to check for new upstream releases
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Upstream tag to sync (e.g., v1.2.3)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  UPSTREAM_REPO: pingdotgg/t3code
+
+jobs:
+  check-upstream:
+    name: Check for new upstream release
+    runs-on: ubuntu-24.04
+    outputs:
+      upstream_tag: ${{ steps.check.outputs.upstream_tag }}
+      should_sync: ${{ steps.check.outputs.should_sync }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for new upstream release
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANUAL_TAG: ${{ github.event.inputs.upstream_tag }}
+        run: |
+          if [ -n "$MANUAL_TAG" ]; then
+            echo "Using manually specified tag: $MANUAL_TAG"
+            echo "upstream_tag=$MANUAL_TAG" >> "$GITHUB_OUTPUT"
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Get latest upstream release
+          latest_upstream=$(gh api "repos/${{ env.UPSTREAM_REPO }}/releases/latest" --jq '.tag_name' 2>/dev/null || echo "")
+          
+          if [ -z "$latest_upstream" ]; then
+            echo "No upstream release found"
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          echo "Latest upstream release: $latest_upstream"
+          
+          # Check if we already have a release with this tag
+          existing_release=$(gh api "repos/${{ github.repository }}/releases/tags/${latest_upstream}" --jq '.tag_name' 2>/dev/null || echo "")
+          
+          if [ "$existing_release" == "$latest_upstream" ]; then
+            echo "Release $latest_upstream already exists in fork"
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New upstream release detected: $latest_upstream"
+            echo "upstream_tag=$latest_upstream" >> "$GITHUB_OUTPUT"
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  sync-upstream:
+    name: Sync with upstream
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_sync == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      sync_commit: ${{ steps.sync.outputs.sync_commit }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" || true
+          git fetch upstream --tags
+
+      - name: Sync with upstream
+        id: sync
+        run: |
+          UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
+          echo "Syncing to upstream tag: $UPSTREAM_TAG"
+          
+          # Checkout the upstream tag
+          git checkout -B sync-branch "upstream/$UPSTREAM_TAG"
+          
+          # Push to fork's main
+          git push origin sync-branch:main --force-with-lease
+          
+          # Get the commit hash
+          SYNC_COMMIT=$(git rev-parse HEAD)
+          echo "sync_commit=$SYNC_COMMIT" >> "$GITHUB_OUTPUT"
+          
+          echo "Successfully synced to $UPSTREAM_TAG (commit: $SYNC_COMMIT)"
+
+  build-deb:
+    name: Build .deb package
+    needs: [check-upstream, sync-upstream]
+    if: needs.check-upstream.outputs.should_sync == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout synced code
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Extract version from upstream tag
+        id: version
+        run: |
+          UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
+          VERSION="${UPSTREAM_TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.version }}"
+
+      - name: Install dpkg dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg fakeroot
+
+      - name: Build desktop artifact (.deb)
+        shell: bash
+        run: |
+          bun run dist:desktop:artifact -- \
+            --platform linux \
+            --target deb \
+            --arch x64 \
+            --build-version "${{ steps.version.outputs.version }}" \
+            --verbose
+
+      - name: Collect .deb artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+
+          # Find the .deb file
+          for file in release/*.deb; do
+            if [ -f "$file" ]; then
+              cp "$file" release-publish/
+              echo "Found .deb file: $file"
+            fi
+          done
+
+          # List what we have
+          ls -la release-publish/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: deb-package
+          path: release-publish/*.deb
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    needs: [check-upstream, build-deb]
+    if: needs.check-upstream.outputs.should_sync == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: deb-package
+          path: release-assets
+
+      - name: List release assets
+        run: ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-upstream.outputs.upstream_tag }}
+          name: T3 Code ${{ needs.check-upstream.outputs.upstream_tag }} (.deb build)
+          body: |
+            This release was automatically created by syncing with upstream [${{ env.UPSTREAM_REPO }}](https://github.com/${{ env.UPSTREAM_REPO }}).
+
+            **Upstream Release:** ${{ needs.check-upstream.outputs.upstream_tag }}
+
+            **Package:** `.deb` package for Debian-based distributions (Ubuntu, Debian, Linux Mint, etc.)
+
+            ## Installation
+
+            ```bash
+            sudo dpkg -i T3-Code-*.deb
+            # If there are dependency issues:
+            sudo apt-get install -f
+            ```
+
+            ## Original Upstream Release
+            See the [upstream release notes](https://github.com/${{ env.UPSTREAM_REPO }}/releases/tag/${{ needs.check-upstream.outputs.upstream_tag }}) for full changelog.
+          prerelease: false
+          make_latest: true
+          files: |
+            release-assets/*.deb
+          fail_on_unmatched_files: true
+
+  notify-failure:
+    name: Notify on failure
+    needs: [check-upstream, sync-upstream, build-deb, create-release]
+    if: failure() && needs.check-upstream.outputs.should_sync == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Log failure
+        run: |
+          echo "::error::The sync and .deb build process failed. Please check the logs above."
+          echo "Upstream tag: ${{ needs.check-upstream.outputs.upstream_tag }}"
