@@ -98,8 +98,11 @@ jobs:
           UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
           echo "Syncing to upstream tag: $UPSTREAM_TAG"
           
-          # Checkout the upstream tag
-          git checkout -B sync-branch "upstream/$UPSTREAM_TAG"
+          # Fetch the specific tag from upstream
+          git fetch upstream tag "$UPSTREAM_TAG" --force
+          
+          # Checkout the upstream tag (now available locally)
+          git checkout -B sync-branch "$UPSTREAM_TAG"
           
           # Push to fork's main
           git push origin sync-branch:main --force-with-lease
