@@ -107,17 +107,24 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout upstream tag
+      - name: Checkout main branch with fixes
         uses: actions/checkout@v6
         with:
+          ref: main
           fetch-depth: 0
 
-      - name: Fetch and checkout upstream tag
+      - name: Verify build script has required fields
         run: |
-          git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" || true
-          UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
-          git fetch upstream tag "$UPSTREAM_TAG" --force
-          git checkout "$UPSTREAM_TAG"
+          # Check that our fixes are present in the build script
+          if ! grep -q "homepage:" scripts/build-desktop-artifact.ts; then
+            echo "ERROR: homepage field not found in build script"
+            exit 1
+          fi
+          if ! grep -q "email:" scripts/build-desktop-artifact.ts; then
+            echo "ERROR: author email not found in build script"
+            exit 1
+          fi
+          echo "Build script fixes verified ✅"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
