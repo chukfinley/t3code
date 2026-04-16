@@ -2,8 +2,8 @@ name: Sync with Upstream and Build .deb
 
 on:
   schedule:
-    # Run every hour to check for new upstream releases
-    - cron: '0 * * * *'
+    # Run daily at 6:00 UTC to check for new upstream releases
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       upstream_tag:
