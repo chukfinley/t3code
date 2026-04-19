@@ -1,0 +1,93 @@
+name: Sync upstream main
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: pingdotgg/t3code
+  FORK_WORKFLOW_PATHS: |
+    .github/workflows/release.yml
+    .github/workflows/sync-and-build-deb.yml
+    .github/workflows/sync-upstream-main.yml
+
+jobs:
+  sync:
+    name: Merge upstream main into fork main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || \
+            git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream main --tags
+
+      - name: Check for new upstream commits
+        id: diff
+        run: |
+          behind=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "Fork is $behind commits behind upstream/main"
+
+      - name: Snapshot fork workflow files
+        if: steps.diff.outputs.behind != '0'
+        run: |
+          mkdir -p "$RUNNER_TEMP/fork-workflows"
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            if [ -f "$path" ]; then
+              mkdir -p "$RUNNER_TEMP/fork-workflows/$(dirname "$path")"
+              cp "$path" "$RUNNER_TEMP/fork-workflows/$path"
+            fi
+          done <<< "$FORK_WORKFLOW_PATHS"
+
+      - name: Merge upstream/main (prefer upstream on conflict)
+        if: steps.diff.outputs.behind != '0'
+        run: |
+          set -e
+          git merge --no-edit -X theirs upstream/main || {
+            # Resolve any remaining conflicts in favor of upstream
+            git diff --name-only --diff-filter=U | xargs -r git checkout --theirs --
+            git add -A
+            git commit --no-edit
+          }
+
+      - name: Restore fork workflow files
+        if: steps.diff.outputs.behind != '0'
+        run: |
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            if [ -f "$RUNNER_TEMP/fork-workflows/$path" ]; then
+              mkdir -p "$(dirname "$path")"
+              cp "$RUNNER_TEMP/fork-workflows/$path" "$path"
+            fi
+          done <<< "$FORK_WORKFLOW_PATHS"
+
+          if git diff --quiet -- .github/workflows/; then
+            echo "No fork workflow divergence after merge"
+          else
+            git add .github/workflows/
+            git commit -m "chore(sync): preserve fork workflow files after upstream merge"
+          fi
+
+      - name: Push merged main
+        if: steps.diff.outputs.behind != '0'
+        run: git push origin main
