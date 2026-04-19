@@ -11,6 +11,7 @@ permissions:
 env:
   UPSTREAM_REPO: pingdotgg/t3code
   FORK_WORKFLOW_PATHS: |
+    .github/workflows/ci.yml
     .github/workflows/release.yml
     .github/workflows/sync-and-build-deb.yml
     .github/workflows/sync-upstream-main.yml
