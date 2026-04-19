@@ -385,7 +385,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: needs.preflight.outputs.release_channel == 'stable'
+    if: needs.preflight.outputs.release_channel == 'stable' && github.repository_owner == 'pingdotgg'
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
