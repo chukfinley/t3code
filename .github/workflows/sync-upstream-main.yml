@@ -2,7 +2,7 @@ name: Sync upstream main
 
 on:
   schedule:
-    - cron: '0 5 * * *'
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -10,11 +10,6 @@ permissions:
 
 env:
   UPSTREAM_REPO: pingdotgg/t3code
-  FORK_WORKFLOW_PATHS: |
-    .github/workflows/ci.yml
-    .github/workflows/release.yml
-    .github/workflows/sync-and-build-deb.yml
-    .github/workflows/sync-upstream-main.yml
 
 jobs:
   sync:
@@ -48,17 +43,13 @@ jobs:
           echo "behind=$behind" >> "$GITHUB_OUTPUT"
           echo "Fork is $behind commits behind upstream/main"
 
-      - name: Snapshot fork workflow files
+      - name: Snapshot fork workflow directory
         if: steps.diff.outputs.behind != '0'
         run: |
+          rm -rf "$RUNNER_TEMP/fork-workflows"
           mkdir -p "$RUNNER_TEMP/fork-workflows"
-          while IFS= read -r path; do
-            [ -z "$path" ] && continue
-            if [ -f "$path" ]; then
-              mkdir -p "$RUNNER_TEMP/fork-workflows/$(dirname "$path")"
-              cp "$path" "$RUNNER_TEMP/fork-workflows/$path"
-            fi
-          done <<< "$FORK_WORKFLOW_PATHS"
+          cp -a .github/workflows/. "$RUNNER_TEMP/fork-workflows/"
+          ls -la "$RUNNER_TEMP/fork-workflows"
 
       - name: Merge upstream/main (prefer upstream on conflict)
         if: steps.diff.outputs.behind != '0'
@@ -71,19 +62,16 @@ jobs:
             git commit --no-edit
           }
 
-      - name: Restore fork workflow files
+      - name: Restore fork workflow directory verbatim
         if: steps.diff.outputs.behind != '0'
         run: |
-          while IFS= read -r path; do
-            [ -z "$path" ] && continue
-            if [ -f "$RUNNER_TEMP/fork-workflows/$path" ]; then
-              mkdir -p "$(dirname "$path")"
-              cp "$RUNNER_TEMP/fork-workflows/$path" "$path"
-            fi
-          done <<< "$FORK_WORKFLOW_PATHS"
+          # GITHUB_TOKEN cannot push workflow file changes — keep fork workflows exactly as they were.
+          rm -rf .github/workflows
+          mkdir -p .github/workflows
+          cp -a "$RUNNER_TEMP/fork-workflows/." .github/workflows/
 
           if git diff --quiet -- .github/workflows/; then
-            echo "No fork workflow divergence after merge"
+            echo "No workflow divergence after merge"
           else
             git add .github/workflows/
             git commit -m "chore(sync): preserve fork workflow files after upstream merge"

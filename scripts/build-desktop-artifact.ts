@@ -575,6 +575,13 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
+    extraMetadata: {
+      homepage: "https://t3.codes",
+      author: {
+        name: "T3 Tools",
+        email: "hello@t3.tools",
+      },
+    },
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   const publishConfig = resolveGitHubPublishConfig(updateChannel);
@@ -603,6 +610,8 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       executableName: "t3code",
       icon: "icon.png",
       category: "Development",
+      maintainer: "T3 Tools <hello@t3.tools>",
+      vendor: "T3 Tools",
       desktop: {
         entry: {
           StartupWMClass: "t3code",
