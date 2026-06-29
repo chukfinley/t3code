@@ -24,17 +24,35 @@ jobs:
       - name: Checkout PR
         uses: actions/checkout@v6
 
-      - name: Verify build script has required fields
+      - name: Inject deb metadata (homepage) into build script
+        shell: bash
         run: |
-          if ! grep -q "homepage:" scripts/build-desktop-artifact.ts; then
-            echo "ERROR: homepage field not found in build script"
-            exit 1
-          fi
-          if ! grep -q "email:" scripts/build-desktop-artifact.ts; then
-            echo "ERROR: author email not found in build script"
-            exit 1
-          fi
-          echo "Build script fixes verified ✅"
+          set -euo pipefail
+          # The .deb target (electron-builder FpmTarget) requires `homepage`,
+          # which upstream's config omits. Re-inject at build time so the fix
+          # survives upstream merges. Idempotent via a marker.
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const file = "scripts/build-desktop-artifact.ts";
+          const marker = "/* fork-deb-homepage */";
+          const homepage = "https://github.com/chukfinley/t3code";
+          let src = fs.readFileSync(file, "utf8");
+          if (src.includes(marker)) {
+            console.log("homepage already injected, skipping");
+            process.exit(0);
+          }
+          const anchor = 'description: "T3 Code desktop build",';
+          if (!src.includes(anchor)) {
+            console.error("ERROR: anchor not found — build script structure changed; update this patch");
+            process.exit(1);
+          }
+          src = src.replace(
+            anchor,
+            `${anchor}\n    homepage: "${homepage}", ${marker}`,
+          );
+          fs.writeFileSync(file, src);
+          console.log("Injected homepage into staged package.json metadata");
+          NODE
 
       - name: Setup Vite+ (vp toolchain)
         uses: voidzero-dev/setup-vp@v1
