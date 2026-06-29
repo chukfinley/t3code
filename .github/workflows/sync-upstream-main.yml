@@ -1,8 +1,7 @@
 name: Sync upstream main
 
 on:
-  schedule:
-    - cron: "0 5 * * *"
+  # Daily schedule disabled — run manually only.
   workflow_dispatch:
 
 permissions:

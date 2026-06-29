@@ -5,7 +5,7 @@ name: Build .deb on PR
 # Does NOT create a release.
 
 on:
-  pull_request:
+  # Auto PR trigger disabled — run manually only.
   workflow_dispatch:
 
 permissions:

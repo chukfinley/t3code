@@ -1,2 +1,0 @@
-claude --resume 7f549128-4634-4224-817c-4970840908e6  # Understanding Claude command usage
-claude --resume 0fff016f-4def-4b9e-9e78-601be8c521a8  # Fix missing random in auto-compilation
