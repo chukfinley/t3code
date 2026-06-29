@@ -81,7 +81,7 @@ jobs:
       - name: Build desktop artifact (.deb)
         shell: bash
         run: |
-          node scripts/build-desktop-artifact.ts \
+          pnpm exec node scripts/build-desktop-artifact.ts \
             --platform linux \
             --target deb \
             --arch x64 \
