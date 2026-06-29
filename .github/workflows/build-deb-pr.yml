@@ -36,26 +36,25 @@ jobs:
           fi
           echo "Build script fixes verified ✅"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version-file: package.json
+          cache: pnpm
 
       - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
-          # Frozen install under the pinned bun version flakes on a git-clone
-          # fallback for vite. Retry, then fall back to a non-frozen resolve so
-          # a transient registry/git hiccup self-heals instead of failing the run.
+          # Retry frozen install to ride out transient registry/network hiccups,
+          # then fall back to a non-frozen resolve so the run self-heals instead
+          # of dying on a single flake.
           for attempt in 1 2 3; do
-            echo "::group::bun install (attempt $attempt)"
-            if bun install --frozen-lockfile; then
+            echo "::group::pnpm install (attempt $attempt)"
+            if pnpm install --frozen-lockfile; then
               echo "::endgroup::"; exit 0
             fi
             echo "::endgroup::"
@@ -63,7 +62,7 @@ jobs:
             sleep $((attempt * 10))
           done
           echo "::warning::Frozen install kept failing; resolving without frozen lockfile"
-          bun install
+          pnpm install --no-frozen-lockfile
 
       - name: Derive build version
         id: version
@@ -82,7 +81,7 @@ jobs:
       - name: Build desktop artifact (.deb)
         shell: bash
         run: |
-          bun run dist:desktop:artifact -- \
+          pnpm run dist:desktop:artifact -- \
             --platform linux \
             --target deb \
             --arch x64 \
