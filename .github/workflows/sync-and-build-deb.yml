@@ -68,39 +68,9 @@ jobs:
             echo "should_sync=true" >> "$GITHUB_OUTPUT"
           fi
 
-  sync-upstream:
-    name: Sync with upstream
-    needs: check-upstream
-    if: needs.check-upstream.outputs.should_sync == 'true'
-    runs-on: ubuntu-24.04
-    outputs:
-      sync_commit: ${{ steps.sync.outputs.sync_commit }}
-    steps:
-      - name: Checkout fork with upstream remote
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Add upstream remote and fetch tag
-        run: |
-          git remote add upstream "https://github.com/${{ env.UPSTREAM_REPO }}.git" || true
-          UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
-          git fetch upstream tag "$UPSTREAM_TAG" --force
-          echo "Fetched upstream tag: $UPSTREAM_TAG"
-
-      - name: Get upstream commit hash
-        id: sync
-        run: |
-          UPSTREAM_TAG="${{ needs.check-upstream.outputs.upstream_tag }}"
-          # Get commit hash from the tag
-          SYNC_COMMIT=$(git rev-parse "$UPSTREAM_TAG^{commit}")
-          echo "sync_commit=$SYNC_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "Upstream tag $UPSTREAM_TAG is at commit: $SYNC_COMMIT"
-
   build-deb:
     name: Build .deb package
-    needs: [check-upstream, sync-upstream]
+    needs: [check-upstream]
     if: needs.check-upstream.outputs.should_sync == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -137,7 +107,23 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Frozen install under the pinned bun version flakes on a git-clone
+          # fallback for vite. Retry, then fall back to a non-frozen resolve so
+          # a transient registry/git hiccup self-heals instead of failing the run.
+          for attempt in 1 2 3; do
+            echo "::group::bun install (attempt $attempt)"
+            if bun install --frozen-lockfile; then
+              echo "::endgroup::"; exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::Frozen install failed (attempt $attempt), retrying..."
+            sleep $((attempt * 10))
+          done
+          echo "::warning::Frozen install kept failing; resolving without frozen lockfile"
+          bun install
 
       - name: Extract version from upstream tag
         id: version
@@ -235,7 +221,7 @@ jobs:
 
   notify-failure:
     name: Notify on failure
-    needs: [check-upstream, sync-upstream, build-deb, create-release]
+    needs: [check-upstream, build-deb, create-release]
     if: failure() && needs.check-upstream.outputs.should_sync == 'true'
     runs-on: ubuntu-24.04
     steps:

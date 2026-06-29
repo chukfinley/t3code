@@ -1,0 +1,110 @@
+name: Build .deb on PR
+
+# Builds the Debian package for every pull request so a broken build is caught
+# before merge, and attaches the resulting .deb as a downloadable artifact.
+# Does NOT create a release.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-deb-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-deb:
+    name: Build .deb package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+
+      - name: Verify build script has required fields
+        run: |
+          if ! grep -q "homepage:" scripts/build-desktop-artifact.ts; then
+            echo "ERROR: homepage field not found in build script"
+            exit 1
+          fi
+          if ! grep -q "email:" scripts/build-desktop-artifact.ts; then
+            echo "ERROR: author email not found in build script"
+            exit 1
+          fi
+          echo "Build script fixes verified ✅"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Frozen install under the pinned bun version flakes on a git-clone
+          # fallback for vite. Retry, then fall back to a non-frozen resolve so
+          # a transient registry/git hiccup self-heals instead of failing the run.
+          for attempt in 1 2 3; do
+            echo "::group::bun install (attempt $attempt)"
+            if bun install --frozen-lockfile; then
+              echo "::endgroup::"; exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::Frozen install failed (attempt $attempt), retrying..."
+            sleep $((attempt * 10))
+          done
+          echo "::warning::Frozen install kept failing; resolving without frozen lockfile"
+          bun install
+
+      - name: Derive build version
+        id: version
+        run: |
+          PR="${{ github.event.pull_request.number || github.run_number }}"
+          SHA="$(git rev-parse --short HEAD)"
+          VERSION="0.0.0-pr${PR}.${SHA}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building PR version: $VERSION"
+
+      - name: Install dpkg dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg fakeroot
+
+      - name: Build desktop artifact (.deb)
+        shell: bash
+        run: |
+          bun run dist:desktop:artifact -- \
+            --platform linux \
+            --target deb \
+            --arch x64 \
+            --build-version "${{ steps.version.outputs.version }}" \
+            --verbose
+
+      - name: Collect .deb artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          for file in release/*.deb; do
+            if [ -f "$file" ]; then
+              cp "$file" release-publish/
+              echo "Found .deb file: $file"
+            fi
+          done
+          ls -la release-publish/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: deb-package-pr${{ github.event.pull_request.number || github.run_number }}
+          path: release-publish/*.deb
+          if-no-files-found: error
