@@ -36,33 +36,12 @@ jobs:
           fi
           echo "Build script fixes verified ✅"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup Vite+ (vp toolchain)
+        uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          cache: pnpm
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Retry frozen install to ride out transient registry/network hiccups,
-          # then fall back to a non-frozen resolve so the run self-heals instead
-          # of dying on a single flake.
-          for attempt in 1 2 3; do
-            echo "::group::pnpm install (attempt $attempt)"
-            if pnpm install --frozen-lockfile; then
-              echo "::endgroup::"; exit 0
-            fi
-            echo "::endgroup::"
-            echo "::warning::Frozen install failed (attempt $attempt), retrying..."
-            sleep $((attempt * 10))
-          done
-          echo "::warning::Frozen install kept failing; resolving without frozen lockfile"
-          pnpm install --no-frozen-lockfile
+          cache: true
+          run-install: true
 
       - name: Derive build version
         id: version
@@ -81,7 +60,7 @@ jobs:
       - name: Build desktop artifact (.deb)
         shell: bash
         run: |
-          pnpm exec node scripts/build-desktop-artifact.ts \
+          vp run dist:desktop:artifact \
             --platform linux \
             --target deb \
             --arch x64 \
